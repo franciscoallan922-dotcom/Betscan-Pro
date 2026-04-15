@@ -4,57 +4,28 @@ import os
 
 API_KEY = os.getenv("RAPIDAPI_KEY")
 
-if not API_KEY:
-    st.error("❌ API KEY não configurada")
-    st.stop()
-
 HEADERS = {
     "X-RapidAPI-Key": API_KEY,
     "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"
 }
 
 st.title("⚽ BetScan PRO")
-st.caption("Scanner profissional de jogos")
+st.caption("Análise de jogos + necessidade de vitória")
 
-# 🔥 LIGAS QUE SEMPRE TEM JOGO
-LEAGUES = [39, 140, 78, 135, 61]  
-# Inglaterra, Espanha, Alemanha, Itália, França
-
-# 🔄 BUSCAR JOGOS REAIS
+# 🔄 BUSCAR JOGOS
 @st.cache_data(ttl=300)
 def buscar_jogos():
     url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
 
-    jogos = []
+    res = requests.get(url, headers=HEADERS, params={"next": 10})
 
-    for liga in LEAGUES:
-        res = requests.get(
-            url,
-            headers=HEADERS,
-            params={
-                "league": liga,
-                "season": 2024,
-                "next": 5,
-                "timezone": "America/Sao_Paulo"
-            }
-        )
+    if res.status_code != 200:
+        return []
 
-        if res.status_code != 200:
-            continue
-
-        data = res.json()
-
-        for j in data.get("response", []):
-            jogos.append({
-                "home": j["teams"]["home"]["name"],
-                "away": j["teams"]["away"]["name"],
-                "home_id": j["teams"]["home"]["id"],
-                "away_id": j["teams"]["away"]["id"]
-            })
-
-    return jogos
+    return res.json().get("response", [])
 
 # 📊 ÚLTIMOS JOGOS
+@st.cache_data(ttl=300)
 def ultimos_jogos(team_id):
     url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
 
@@ -67,60 +38,100 @@ def ultimos_jogos(team_id):
     if res.status_code != 200:
         return 0
 
-    data = res.json()
-
     gols = []
 
-    for j in data.get("response", []):
+    for j in res.json().get("response", []):
         g = (j["goals"]["home"] or 0) + (j["goals"]["away"] or 0)
         gols.append(g)
 
     return sum(gols) / len(gols) if gols else 0
 
-# 🧠 SCORE
-def calcular_score(media):
+# 🏆 CLASSIFICAÇÃO
+@st.cache_data(ttl=300)
+def tabela(league_id):
+    url = "https://api-football-v1.p.rapidapi.com/v3/standings"
+
+    res = requests.get(
+        url,
+        headers=HEADERS,
+        params={"league": league_id, "season": 2024}
+    )
+
+    if res.status_code != 200:
+        return {}
+
+    tabela = {}
+
+    try:
+        for t in res.json()["response"][0]["league"]["standings"][0]:
+            tabela[t["team"]["id"]] = t["rank"]
+    except:
+        return {}
+
+    return tabela
+
+# 🧠 ANÁLISE
+def analisar(media, pos_home, pos_away):
+
+    necessidade = ""
+
+    if pos_home and pos_away:
+        if pos_home > pos_away:
+            necessidade = "🔥 Casa precisa vencer"
+        elif pos_away > pos_home:
+            necessidade = "🔥 Visitante precisa vencer"
+
     if media >= 3:
-        return 3
-    elif media >= 2.5:
-        return 2
-    elif media >= 1.5:
-        return 1
-    return 0
+        sugestao = "🔥 Over 2.5 gols"
+    elif media >= 2:
+        sugestao = "⚠️ Over 1.5 gols"
+    else:
+        sugestao = "⚖️ Jogo fechado"
+
+    return necessidade, sugestao
 
 # 🚀 EXECUÇÃO
-if st.button("🔍 Escanear Jogos"):
+if st.button("🔍 Analisar Jogos"):
 
     jogos = buscar_jogos()
 
     if not jogos:
-        st.error("❌ Nenhum jogo encontrado (API limitou ou sem jogos)")
+        st.error("❌ API não retornou jogos")
         st.stop()
 
-    resultados = []
+    for j in jogos:
 
-    for jogo in jogos:
+        home = j["teams"]["home"]["name"]
+        away = j["teams"]["away"]["name"]
 
-        g_home = ultimos_jogos(jogo["home_id"])
-        g_away = ultimos_jogos(jogo["away_id"])
+        home_id = j["teams"]["home"]["id"]
+        away_id = j["teams"]["away"]["id"]
 
-        media = (g_home + g_away) / 2
-        score = calcular_score(media)
+        league_id = j["league"]["id"]
 
-        resultados.append({
-            "jogo": f"{jogo['home']} x {jogo['away']}",
-            "media": media,
-            "score": score
-        })
+        # dados
+        media_home = ultimos_jogos(home_id)
+        media_away = ultimos_jogos(away_id)
 
-    resultados = sorted(resultados, key=lambda x: x["score"], reverse=True)
+        media_total = (media_home + media_away) / 2
 
-    st.subheader("🔥 MELHORES JOGOS")
+        tabela_liga = tabela(league_id)
 
-    for r in resultados[:7]:
+        pos_home = tabela_liga.get(home_id)
+        pos_away = tabela_liga.get(away_id)
 
-        if r["score"] >= 3:
-            st.success(f"🔥 {r['jogo']} → Over 2.5")
-        elif r["score"] == 2:
-            st.warning(f"⚠️ {r['jogo']} → Over 1.5")
-        else:
-            st.info(f"{r['jogo']} → neutro")
+        necessidade, sugestao = analisar(media_total, pos_home, pos_away)
+
+        # UI
+        st.markdown("---")
+        st.subheader(f"{home} x {away}")
+
+        st.write(f"⚽ Média de gols: {media_total:.2f}")
+
+        if pos_home and pos_away:
+            st.write(f"📊 Posição: {home} ({pos_home}) vs {away} ({pos_away})")
+
+        if necessidade:
+            st.warning(necessidade)
+
+        st.success(sugestao)

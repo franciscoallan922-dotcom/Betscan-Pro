@@ -2,7 +2,6 @@ import streamlit as st
 import requests
 import os
 
-# 🔐 API KEY
 API_KEY = os.getenv("RAPIDAPI_KEY")
 
 if not API_KEY:
@@ -14,31 +13,36 @@ HEADERS = {
     "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"
 }
 
-st.set_page_config(page_title="BetScan PRO", page_icon="⚽")
-
 st.title("⚽ BetScan PRO")
-st.caption("Scanner automático de jogos")
+st.caption("Scanner profissional de jogos")
 
-# 🔍 DEBUG (pode desligar depois)
-DEBUG = False
+# 🔥 LIGAS QUE SEMPRE TEM JOGO
+LEAGUES = [39, 140, 78, 135, 61]  
+# Inglaterra, Espanha, Alemanha, Itália, França
 
-# 🔄 BUSCAR JOGOS
+# 🔄 BUSCAR JOGOS REAIS
 @st.cache_data(ttl=300)
 def buscar_jogos():
     url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
 
-    try:
-        res = requests.get(url, headers=HEADERS, params={"next": 20})
+    jogos = []
 
-        if DEBUG:
-            st.write("STATUS:", res.status_code)
+    for liga in LEAGUES:
+        res = requests.get(
+            url,
+            headers=HEADERS,
+            params={
+                "league": liga,
+                "season": 2024,
+                "next": 5,
+                "timezone": "America/Sao_Paulo"
+            }
+        )
 
         if res.status_code != 200:
-            return []
+            continue
 
         data = res.json()
-
-        jogos = []
 
         for j in data.get("response", []):
             jogos.append({
@@ -48,40 +52,30 @@ def buscar_jogos():
                 "away_id": j["teams"]["away"]["id"]
             })
 
-        return jogos
-
-    except Exception as e:
-        if DEBUG:
-            st.write("ERRO:", e)
-        return []
+    return jogos
 
 # 📊 ÚLTIMOS JOGOS
-@st.cache_data(ttl=300)
 def ultimos_jogos(team_id):
     url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
 
-    try:
-        res = requests.get(
-            url,
-            headers=HEADERS,
-            params={"team": team_id, "last": 5}
-        )
+    res = requests.get(
+        url,
+        headers=HEADERS,
+        params={"team": team_id, "last": 5}
+    )
 
-        if res.status_code != 200:
-            return 0
-
-        data = res.json()
-
-        gols = []
-
-        for j in data.get("response", []):
-            g = (j["goals"]["home"] or 0) + (j["goals"]["away"] or 0)
-            gols.append(g)
-
-        return sum(gols) / len(gols) if gols else 0
-
-    except:
+    if res.status_code != 200:
         return 0
+
+    data = res.json()
+
+    gols = []
+
+    for j in data.get("response", []):
+        g = (j["goals"]["home"] or 0) + (j["goals"]["away"] or 0)
+        gols.append(g)
+
+    return sum(gols) / len(gols) if gols else 0
 
 # 🧠 SCORE
 def calcular_score(media):
@@ -91,27 +85,20 @@ def calcular_score(media):
         return 2
     elif media >= 1.5:
         return 1
-    else:
-        return 0
+    return 0
 
-# 🚀 BOTÃO
-if st.button("🔍 Escanear Jogos do Dia"):
+# 🚀 EXECUÇÃO
+if st.button("🔍 Escanear Jogos"):
 
     jogos = buscar_jogos()
 
-    # 🔥 Fallback (se API falhar)
     if not jogos:
-        st.warning("⚠️ API não retornou jogos. Usando fallback...")
-
-        jogos = [
-            {"home": "Time A", "away": "Time B", "home_id": 33, "away_id": 34},
-            {"home": "Time C", "away": "Time D", "home_id": 40, "away_id": 50},
-        ]
+        st.error("❌ Nenhum jogo encontrado (API limitou ou sem jogos)")
+        st.stop()
 
     resultados = []
-    progress = st.progress(0)
 
-    for i, jogo in enumerate(jogos):
+    for jogo in jogos:
 
         g_home = ultimos_jogos(jogo["home_id"])
         g_away = ultimos_jogos(jogo["away_id"])
@@ -125,26 +112,15 @@ if st.button("🔍 Escanear Jogos do Dia"):
             "score": score
         })
 
-        progress.progress((i + 1) / len(jogos))
-
     resultados = sorted(resultados, key=lambda x: x["score"], reverse=True)
 
-    st.markdown("---")
-    st.subheader("🔥 Melhores jogos")
+    st.subheader("🔥 MELHORES JOGOS")
 
-    for r in resultados[:5]:
+    for r in resultados[:7]:
 
-        if r["score"] == 3:
-            st.success(f"🔥 {r['jogo']}")
-            st.write(f"⚽ Média: {r['media']:.2f}")
-            st.write("🎯 Over 2.5 gols")
-
+        if r["score"] >= 3:
+            st.success(f"🔥 {r['jogo']} → Over 2.5")
         elif r["score"] == 2:
-            st.warning(f"⚠️ {r['jogo']}")
-            st.write(f"⚽ Média: {r['media']:.2f}")
-            st.write("🎯 Over 1.5 gols")
-
+            st.warning(f"⚠️ {r['jogo']} → Over 1.5")
         else:
-            st.info(f"{r['jogo']}")
-            st.write(f"⚽ Média: {r['media']:.2f}")
-            st.write("⚖️ Jogo neutro")
+            st.info(f"{r['jogo']} → neutro")
